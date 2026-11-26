@@ -69,23 +69,23 @@ namespace Simd
 
         //-------------------------------------------------------------------------------------------------
 
-        template <class T> SIMD_INLINE void BgrToYuv420pV2(const uint8_t* bgr0, size_t bgrStride, uint8_t* y0, size_t yStride, uint8_t* u, uint8_t* v)
+        template <class T, bool nv12 = false, bool rgb = false> SIMD_INLINE void BgrToYuv420pV2(const uint8_t* bgr0, size_t bgrStride, uint8_t* y0, size_t yStride, uint8_t* u, uint8_t* v)
         {
             const uint8_t* bgr1 = bgr0 + bgrStride;
             uint8_t* y1 = y0 + yStride;
 
             __m256i blue[2][2], green[2][2], red[2][2];
 
-            LoadBgr<false>((__m256i*)bgr0 + 0, blue[0][0], green[0][0], red[0][0]);
+            LoadBgr<false>((__m256i*)bgr0 + 0, rgb ? red[0][0] : blue[0][0], green[0][0], rgb ? blue[0][0] : red[0][0]);
             _mm256_storeu_si256((__m256i*)y0 + 0, BgrToY8<T>(blue[0][0], green[0][0], red[0][0]));
 
-            LoadBgr<false>((__m256i*)bgr0 + 3, blue[0][1], green[0][1], red[0][1]);
+            LoadBgr<false>((__m256i*)bgr0 + 3, rgb ? red[0][1] : blue[0][1], green[0][1], rgb ? blue[0][1] : red[0][1]);
             _mm256_storeu_si256((__m256i*)y0 + 1, BgrToY8<T>(blue[0][1], green[0][1], red[0][1]));
 
-            LoadBgr<false>((__m256i*)bgr1 + 0, blue[1][0], green[1][0], red[1][0]);
+            LoadBgr<false>((__m256i*)bgr1 + 0, rgb ? red[1][0] : blue[1][0], green[1][0], rgb ? blue[1][0] : red[1][0]);
             _mm256_storeu_si256((__m256i*)y1 + 0, BgrToY8<T>(blue[1][0], green[1][0], red[1][0]));
 
-            LoadBgr<false>((__m256i*)bgr1 + 3, blue[1][1], green[1][1], red[1][1]);
+            LoadBgr<false>((__m256i*)bgr1 + 3, rgb ? red[1][1] : blue[1][1], green[1][1], rgb ? blue[1][1] : red[1][1]);
             _mm256_storeu_si256((__m256i*)y1 + 1, BgrToY8<T>(blue[1][1], green[1][1], red[1][1]));
 
             blue[0][0] = Average16(blue[0][0], blue[1][0]);
@@ -95,8 +95,20 @@ namespace Simd
             red[0][0] = Average16(red[0][0], red[1][0]);
             red[0][1] = Average16(red[0][1], red[1][1]);
 
-            _mm256_storeu_si256((__m256i*)u, PackI16ToU8(BgrToU16<T>(blue[0][0], green[0][0], red[0][0]), BgrToU16<T>(blue[0][1], green[0][1], red[0][1])));
-            _mm256_storeu_si256((__m256i*)v, PackI16ToU8(BgrToV16<T>(blue[0][0], green[0][0], red[0][0]), BgrToV16<T>(blue[0][1], green[0][1], red[0][1])));
+            __m256i chromaU = PackI16ToU8(BgrToU16<T>(blue[0][0], green[0][0], red[0][0]), BgrToU16<T>(blue[0][1], green[0][1], red[0][1]));
+            __m256i chromaV = PackI16ToU8(BgrToV16<T>(blue[0][0], green[0][0], red[0][0]), BgrToV16<T>(blue[0][1], green[0][1], red[0][1]));
+            if (nv12)
+            {
+                chromaU = _mm256_permute4x64_epi64(chromaU, 0xD8);
+                chromaV = _mm256_permute4x64_epi64(chromaV, 0xD8);
+                Store<false>((__m256i*)u + 0, UnpackU8<0>(chromaU, chromaV));
+                Store<false>((__m256i*)u + 1, UnpackU8<1>(chromaU, chromaV));
+            }
+            else
+            {
+                Store<false>((__m256i*)u, chromaU);
+                Store<false>((__m256i*)v, chromaV);
+            }
         }
 
         template <class T>  void BgrToYuv420pV2(const uint8_t* bgr, size_t bgrStride, size_t width, size_t height, uint8_t* y, size_t yStride,
@@ -133,6 +145,56 @@ namespace Simd
             case SimdYuvBt709: BgrToYuv420pV2<Base::Bt709>(bgr, bgrStride, width, height, y, yStride, u, uStride, v, vStride); break;
             case SimdYuvBt2020: BgrToYuv420pV2<Base::Bt2020>(bgr, bgrStride, width, height, y, yStride, u, uStride, v, vStride); break;
             case SimdYuvTrect871: BgrToYuv420pV2<Base::Trect871>(bgr, bgrStride, width, height, y, yStride, u, uStride, v, vStride); break;
+            default:
+                assert(0);
+            }
+#endif
+        }
+
+        //-------------------------------------------------------------------------------------------------
+
+        template <class T, bool rgb> void BgrToNv12(const uint8_t* bgr, size_t bgrStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride)
+        {
+            assert((width % 2 == 0) && (height % 2 == 0) && (width >= DA) && (height >= 2));
+            size_t widthDA = AlignLo(width, DA);
+            for (size_t row = 0; row < height; row += 2)
+            {
+                for (size_t col = 0; col < widthDA; col += DA)
+                    BgrToYuv420pV2<T, true, rgb>(bgr + col * 3, bgrStride, y + col, yStride, uv + col, NULL);
+                if (width != widthDA)
+                {
+                    size_t col = width - DA;
+                    BgrToYuv420pV2<T, true, rgb>(bgr + col * 3, bgrStride, y + col, yStride, uv + col, NULL);
+                }
+                bgr += 2 * bgrStride;
+                y += 2 * yStride;
+                uv += uvStride;
+            }
+        }
+
+        template <class T> void BgrToNv12(const uint8_t* bgr, size_t bgrStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride, SimdRgbOrderType rgbOrder)
+        {
+            assert(rgbOrder == SimdBgr || rgbOrder == SimdRgb);
+            if (rgbOrder == SimdRgb)
+                BgrToNv12<T, true>(bgr, bgrStride, width, height, y, yStride, uv, uvStride);
+            else
+                BgrToNv12<T, false>(bgr, bgrStride, width, height, y, yStride, uv, uvStride);
+        }
+
+        void BgrToNv12(const uint8_t* bgr, size_t bgrStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride, SimdRgbOrderType rgbOrder, SimdYuvType yuvType)
+        {
+#if defined(SIMD_X86_ENABLE) && defined(NDEBUG) && defined(_MSC_VER) && _MSC_VER <= 1900
+            Base::BgrToNv12(bgr, bgrStride, width, height, y, yStride, uv, uvStride, rgbOrder, yuvType);
+#else
+            switch (yuvType)
+            {
+            case SimdYuvBt601: BgrToNv12<Base::Bt601>(bgr, bgrStride, width, height, y, yStride, uv, uvStride, rgbOrder); break;
+            case SimdYuvBt709: BgrToNv12<Base::Bt709>(bgr, bgrStride, width, height, y, yStride, uv, uvStride, rgbOrder); break;
+            case SimdYuvBt2020: BgrToNv12<Base::Bt2020>(bgr, bgrStride, width, height, y, yStride, uv, uvStride, rgbOrder); break;
+            case SimdYuvTrect871: BgrToNv12<Base::Trect871>(bgr, bgrStride, width, height, y, yStride, uv, uvStride, rgbOrder); break;
             default:
                 assert(0);
             }

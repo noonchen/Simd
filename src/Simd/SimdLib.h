@@ -2295,6 +2295,29 @@ extern "C"
 
     /*! @ingroup bgra_conversion
 
+        \fn void SimdBgraToNv12(const uint8_t * bgra, size_t bgraStride, size_t width, size_t height, uint8_t * y, size_t yStride, uint8_t * uv, size_t uvStride, SimdRgbOrderType rgbOrder, SimdYuvType yuvType);
+
+        \short Converts a 32-bit BGRA or RGBA image to NV12, ignoring alpha.
+
+        Width and height must be even and at least 2. The Y plane has height rows and the interleaved UV plane has height/2 rows.
+        Both output planes store width bytes per row. Each U,V pair is computed from the average color of a 2x2 source block.
+
+        \param [in] bgra - a pointer to input BGRA or RGBA pixels.
+        \param [in] bgraStride - the source row stride in bytes (at least 4*width).
+        \param [in] width - the source image width.
+        \param [in] height - the source image height.
+        \param [out] y - a pointer to the output Y plane.
+        \param [in] yStride - the Y row stride in bytes (at least width).
+        \param [out] uv - a pointer to the output UV plane, stored in U,V byte order.
+        \param [in] uvStride - the UV row stride in bytes (at least width).
+        \param [in] rgbOrder - the source channel order: ::SimdBgr for BGRA or ::SimdRgb for RGBA.
+        \param [in] yuvType - the YUV conversion standard (see ::SimdYuvType).
+    */
+    SIMD_API void SimdBgraToNv12(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height,
+        uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride, SimdRgbOrderType rgbOrder, SimdYuvType yuvType);
+
+    /*! @ingroup bgra_conversion
+
         \fn void SimdBgraToYuv444pV2(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height, uint8_t* y, size_t yStride, uint8_t* u, size_t uStride, uint8_t* v, size_t vStride, SimdYuvType yuvType);
 
         \short Converts a 32-bit BGRA image to planar YUV444P (4:4:4) and ignores input alpha.
@@ -2606,6 +2629,29 @@ extern "C"
         \param [in] yuvPattern - a packing pattern of the output YUV422 image (see description of ::SimdYuv422PackPatternType).
     */
     SIMD_API void SimdBgrToYuv422Packed(const uint8_t* bgr, size_t bgrStride, size_t width, size_t height, uint8_t* yuv, size_t yuvStride, SimdRgbOrderType rgbOrder, SimdYuvType yuvType, SimdYuv422PackPatternType yuvPattern);
+
+    /*! @ingroup bgr_conversion
+
+        \fn void SimdBgrToNv12(const uint8_t * bgr, size_t bgrStride, size_t width, size_t height, uint8_t * y, size_t yStride, uint8_t * uv, size_t uvStride, SimdRgbOrderType rgbOrder, SimdYuvType yuvType);
+
+        \short Converts a 24-bit BGR or RGB image to NV12.
+
+        Width and height must be even and at least 2. The Y plane has height rows and the interleaved UV plane has height/2 rows.
+        Both output planes store width bytes per row. Each U,V pair is computed from the average color of a 2x2 source block.
+
+        \param [in] bgr - a pointer to input BGR or RGB pixels.
+        \param [in] bgrStride - the source row stride in bytes (at least 3*width).
+        \param [in] width - the source image width.
+        \param [in] height - the source image height.
+        \param [out] y - a pointer to the output Y plane.
+        \param [in] yStride - the Y row stride in bytes (at least width).
+        \param [out] uv - a pointer to the output UV plane, stored in U,V byte order.
+        \param [in] uvStride - the UV row stride in bytes (at least width).
+        \param [in] rgbOrder - the source channel order (see ::SimdRgbOrderType).
+        \param [in] yuvType - the YUV conversion standard (see ::SimdYuvType).
+    */
+    SIMD_API void SimdBgrToNv12(const uint8_t* bgr, size_t bgrStride, size_t width, size_t height,
+        uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride, SimdRgbOrderType rgbOrder, SimdYuvType yuvType);
 
     /*! @ingroup bgr_conversion
 

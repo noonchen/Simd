@@ -193,16 +193,43 @@ namespace Simd
 
         //-------------------------------------------------------------------------------------------------
 
-        template <class T> SIMD_INLINE void BgraToYuv420pV2(const uint8_t* bgra0, size_t bgraStride, uint8_t* y0, size_t yStride, uint8_t* u, uint8_t* v)
+        template <class T> SIMD_INLINE __m256i LoadAndRgbaToY16(const __m256i* bgra, __m256i& b16_r16, __m256i& g16_1)
+        {
+            __m256i _b16_r16[2], _g16_1[2];
+            LoadPreparedBgra16<false>(bgra + 0, _b16_r16[0], _g16_1[0]);
+            LoadPreparedBgra16<false>(bgra + 1, _b16_r16[1], _g16_1[1]);
+            // For RGBA input, actual output from LoadPreparedBgra16 is r16_b16,
+            // so we need to swap the R and B to get correct b16_r16 for calculation.
+            static const __m256i K8_SWAP_BR = SIMD_MM256_SETR_EPI8(
+                0x2, 0x3, 0x0, 0x1, 0x6, 0x7, 0x4, 0x5, 0xA, 0xB, 0x8, 0x9, 0xE, 0xF, 0xC, 0xD,
+                0x2, 0x3, 0x0, 0x1, 0x6, 0x7, 0x4, 0x5, 0xA, 0xB, 0x8, 0x9, 0xE, 0xF, 0xC, 0xD);
+            _b16_r16[0] = _mm256_shuffle_epi8(_b16_r16[0], K8_SWAP_BR);
+            _b16_r16[1] = _mm256_shuffle_epi8(_b16_r16[1], K8_SWAP_BR);
+            b16_r16 = _mm256_permute4x64_epi64(_mm256_hadd_epi32(_b16_r16[0], _b16_r16[1]), 0xD8);
+            g16_1 = _mm256_permute4x64_epi64(_mm256_hadd_epi32(_g16_1[0], _g16_1[1]), 0xD8);
+            return BgrToY16<T>(_b16_r16, _g16_1);
+        }
+
+        template <bool rgba, class T> SIMD_INLINE __m256i LoadAndRgbaToY8(const __m256i* bgra, __m256i b16_r16[2], __m256i g16_1[2])
+        {
+            if (!rgba)
+                return LoadAndBgrToY8<T>(bgra, b16_r16, g16_1);
+
+            return PackI16ToU8(LoadAndRgbaToY16<T>(bgra + 0, b16_r16[0], g16_1[0]), LoadAndRgbaToY16<T>(bgra + 2, b16_r16[1], g16_1[1]));
+        }
+
+        //-------------------------------------------------------------------------------------------------
+
+        template <class T, bool nv12 = false, bool rgba = false> SIMD_INLINE void BgraToYuv420pV2(const uint8_t* bgra0, size_t bgraStride, uint8_t* y0, size_t yStride, uint8_t* u, uint8_t* v)
         {
             const uint8_t* bgra1 = bgra0 + bgraStride;
             uint8_t* y1 = y0 + yStride;
 
             __m256i _b16_r16[2][2][2], _g16_1[2][2][2];
-            Store<false>((__m256i*)y0 + 0, LoadAndBgrToY8<T>((__m256i*)bgra0 + 0, _b16_r16[0][0], _g16_1[0][0]));
-            Store<false>((__m256i*)y0 + 1, LoadAndBgrToY8<T>((__m256i*)bgra0 + 4, _b16_r16[0][1], _g16_1[0][1]));
-            Store<false>((__m256i*)y1 + 0, LoadAndBgrToY8<T>((__m256i*)bgra1 + 0, _b16_r16[1][0], _g16_1[1][0]));
-            Store<false>((__m256i*)y1 + 1, LoadAndBgrToY8<T>((__m256i*)bgra1 + 4, _b16_r16[1][1], _g16_1[1][1]));
+            Store<false>((__m256i*)y0 + 0, LoadAndRgbaToY8<rgba, T>((__m256i*)bgra0 + 0, _b16_r16[0][0], _g16_1[0][0]));
+            Store<false>((__m256i*)y0 + 1, LoadAndRgbaToY8<rgba, T>((__m256i*)bgra0 + 4, _b16_r16[0][1], _g16_1[0][1]));
+            Store<false>((__m256i*)y1 + 0, LoadAndRgbaToY8<rgba, T>((__m256i*)bgra1 + 0, _b16_r16[1][0], _g16_1[1][0]));
+            Store<false>((__m256i*)y1 + 1, LoadAndRgbaToY8<rgba, T>((__m256i*)bgra1 + 4, _b16_r16[1][1], _g16_1[1][1]));
 
             Average16(_b16_r16[0][0][0], _b16_r16[1][0][0]);
             Average16(_b16_r16[0][0][1], _b16_r16[1][0][1]);
@@ -214,8 +241,20 @@ namespace Simd
             Average16(_g16_1[0][1][0], _g16_1[1][1][0]);
             Average16(_g16_1[0][1][1], _g16_1[1][1][1]);
 
-            Store<false>((__m256i*)u, PackI16ToU8(BgrToU16<T>(_b16_r16[0][0], _g16_1[0][0]), BgrToU16<T>(_b16_r16[0][1], _g16_1[0][1])));
-            Store<false>((__m256i*)v, PackI16ToU8(BgrToV16<T>(_b16_r16[0][0], _g16_1[0][0]), BgrToV16<T>(_b16_r16[0][1], _g16_1[0][1])));
+            __m256i chromaU = PackI16ToU8(BgrToU16<T>(_b16_r16[0][0], _g16_1[0][0]), BgrToU16<T>(_b16_r16[0][1], _g16_1[0][1]));
+            __m256i chromaV = PackI16ToU8(BgrToV16<T>(_b16_r16[0][0], _g16_1[0][0]), BgrToV16<T>(_b16_r16[0][1], _g16_1[0][1]));
+            if (nv12)
+            {
+                chromaU = _mm256_permute4x64_epi64(chromaU, 0xD8);
+                chromaV = _mm256_permute4x64_epi64(chromaV, 0xD8);
+                Store<false>((__m256i*)u + 0, UnpackU8<0>(chromaU, chromaV));
+                Store<false>((__m256i*)u + 1, UnpackU8<1>(chromaU, chromaV));
+            }
+            else
+            {
+                Store<false>((__m256i*)u, chromaU);
+                Store<false>((__m256i*)v, chromaV);
+            }
         }
 
         template <class T>  void BgraToYuv420pV2(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height, uint8_t* y, size_t yStride,
@@ -256,6 +295,56 @@ namespace Simd
             default:
                 assert(0);
             }
+#endif
+        }
+
+        //-------------------------------------------------------------------------------------------------
+
+        template <class T, bool rgba> void BgraToNv12(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride)
+        {
+            assert((width % 2 == 0) && (height % 2 == 0) && (width >= DA) && (height >= 2));
+            size_t widthDA = AlignLo(width, DA);
+            for (size_t row = 0; row < height; row += 2)
+            {
+                for (size_t col = 0; col < widthDA; col += DA)
+                    BgraToYuv420pV2<T, true, rgba>(bgra + col * 4, bgraStride, y + col, yStride, uv + col, NULL);
+                if (width != widthDA)
+                {
+                    size_t col = width - DA;
+                    BgraToYuv420pV2<T, true, rgba>(bgra + col * 4, bgraStride, y + col, yStride, uv + col, NULL);
+                }
+                bgra += 2 * bgraStride;
+                y += 2 * yStride;
+                uv += uvStride;
+            }
+        }
+
+        template <bool rgba> void BgraToNv12(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride, SimdYuvType yuvType)
+        {
+            switch (yuvType)
+            {
+            case SimdYuvBt601: BgraToNv12<Base::Bt601, rgba>(bgra, bgraStride, width, height, y, yStride, uv, uvStride); break;
+            case SimdYuvBt709: BgraToNv12<Base::Bt709, rgba>(bgra, bgraStride, width, height, y, yStride, uv, uvStride); break;
+            case SimdYuvBt2020: BgraToNv12<Base::Bt2020, rgba>(bgra, bgraStride, width, height, y, yStride, uv, uvStride); break;
+            case SimdYuvTrect871: BgraToNv12<Base::Trect871, rgba>(bgra, bgraStride, width, height, y, yStride, uv, uvStride); break;
+            default:
+                assert(0);
+            }
+        }
+
+        void BgraToNv12(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride, SimdRgbOrderType rgbOrder, SimdYuvType yuvType)
+        {
+#if defined(SIMD_X86_ENABLE) && defined(NDEBUG) && defined(_MSC_VER) && _MSC_VER <= 1900
+            Base::BgraToNv12(bgra, bgraStride, width, height, y, yStride, uv, uvStride, rgbOrder, yuvType);
+#else
+            assert(rgbOrder == SimdBgr || rgbOrder == SimdRgb);
+            if (rgbOrder == SimdRgb)
+                BgraToNv12<true>(bgra, bgraStride, width, height, y, yStride, uv, uvStride, yuvType);
+            else
+                BgraToNv12<false>(bgra, bgraStride, width, height, y, yStride, uv, uvStride, yuvType);
 #endif
         }
 
@@ -350,31 +439,6 @@ namespace Simd
         }
 
         //-------------------------------------------------------------------------------------------------
-
-        template <class T> SIMD_INLINE __m256i LoadAndRgbaToY16(const __m256i* bgra, __m256i& b16_r16, __m256i& g16_1)
-        {
-            __m256i _b16_r16[2], _g16_1[2];
-            LoadPreparedBgra16<false>(bgra + 0, _b16_r16[0], _g16_1[0]);
-            LoadPreparedBgra16<false>(bgra + 1, _b16_r16[1], _g16_1[1]);
-            // For RGBA input, actual output from LoadPreparedBgra16 is r16_b16,
-            // so we need to swap the R and B to get correct b16_r16 for calculation.
-            static const __m256i K8_SWAP_BR = SIMD_MM256_SETR_EPI8(
-                0x2, 0x3, 0x0, 0x1, 0x6, 0x7, 0x4, 0x5, 0xA, 0xB, 0x8, 0x9, 0xE, 0xF, 0xC, 0xD,
-                0x2, 0x3, 0x0, 0x1, 0x6, 0x7, 0x4, 0x5, 0xA, 0xB, 0x8, 0x9, 0xE, 0xF, 0xC, 0xD);
-            _b16_r16[0] = _mm256_shuffle_epi8(_b16_r16[0], K8_SWAP_BR);
-            _b16_r16[1] = _mm256_shuffle_epi8(_b16_r16[1], K8_SWAP_BR);
-            b16_r16 = _mm256_permute4x64_epi64(_mm256_hadd_epi32(_b16_r16[0], _b16_r16[1]), 0xD8);
-            g16_1 = _mm256_permute4x64_epi64(_mm256_hadd_epi32(_g16_1[0], _g16_1[1]), 0xD8);
-            return BgrToY16<T>(_b16_r16, _g16_1);
-        }
-
-        template <bool rgba, class T> SIMD_INLINE __m256i LoadAndRgbaToY8(const __m256i* bgra, __m256i b16_r16[2], __m256i g16_1[2])
-        {
-            if (!rgba)
-                return LoadAndBgrToY8<T>(bgra, b16_r16, g16_1);
-
-            return PackI16ToU8(LoadAndRgbaToY16<T>(bgra + 0, b16_r16[0], g16_1[0]), LoadAndRgbaToY16<T>(bgra + 2, b16_r16[1], g16_1[1]));
-        }
 
         template <bool align, bool rgba, class T> SIMD_INLINE void BgraToYuv422Packed(const uint8_t* bgra, uint8_t* yuv, SimdYuv422PackPatternType yuvPattern)
         {

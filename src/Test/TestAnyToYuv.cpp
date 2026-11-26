@@ -477,6 +477,122 @@ namespace Test
         return result;
     }
 
+    namespace
+    {
+        struct FuncNv12
+        {
+            decltype(&SimdBgrToNv12) func;
+            String description;
+
+            void Call(const View& src, View& y, View& uv, SimdRgbOrderType order, SimdYuvType type) const
+            {
+                TEST_PERFORMANCE_TEST(description);
+                func(src.data, src.stride, src.width, src.height, y.data, y.stride, uv.data, uv.stride, order, type);
+            }
+        };
+    }
+
+#define FUNC_NV12(function) FuncNv12{ function, #function }
+
+    static bool ColorToNv12AutoTest(View::Format format, decltype(&SimdBgrToYuv420pV2) planar,
+        const FuncNv12& api, const FuncNv12& base, const FuncNv12& avx2)
+    {
+        const int mainWidth = W >= 2 ? W - W % 2 : 2;
+        const int mainHeight = H >= 2 ? H - H % 2 : 2;
+        const int avx2Block = 64;
+        const int widths[] = { mainWidth, mainWidth + ((mainWidth + 2) % avx2Block == 0 ? 4 : 2), 2 };
+        const int heights[] = { mainHeight, mainHeight + 2, 2 };
+        const FuncNv12* functions[] = { &api, &base, &avx2 };
+        for (size_t index = 0; index < sizeof(widths) / sizeof(widths[0]); ++index)
+        {
+            const int width = widths[index];
+            const int height = heights[index];
+            const bool narrow = index == 2;
+            TEST_LOG_SS(Info, "Test " << api.description << " [" << width << ", " << height << "].");
+            View bgr(width, height, format, NULL, TEST_ALIGN(width)), rgb(width, height, format, NULL, TEST_ALIGN(width));
+            View yRef(width, height, View::Gray8), y(width, height, View::Gray8, NULL, TEST_ALIGN(width));
+            View uRef(width / 2, height / 2, View::Gray8), vRef(width / 2, height / 2, View::Gray8);
+            View uvRef(width, height / 2, View::Gray8), uv(width, height / 2, View::Gray8, NULL, TEST_ALIGN(width));
+            FillRandom(bgr);
+            if (format == View::Bgra32)
+            {
+                SimdBgraToRgba(bgr.data, width, height, bgr.stride, rgb.data, rgb.stride);
+                for (int row = 0; row < height; ++row)
+                    for (int col = 0; col < width; ++col)
+                        rgb.Row<uint8_t>(row)[4 * col + 3] ^= 0xFF;
+            }
+            else
+                SimdBgrToRgb(bgr.data, width, height, bgr.stride, rgb.data, rgb.stride);
+
+            for (int type = SimdYuvBt601; type <= SimdYuvTrect871; ++type)
+            {
+                SimdYuvType yuvType = (SimdYuvType)type;
+                planar(bgr.data, bgr.stride, width, height, yRef.data, yRef.stride,
+                    uRef.data, uRef.stride, vRef.data, vRef.stride, yuvType);
+                for (int row = 0; row < height / 2; ++row)
+                {
+                    for (int col = 0; col < width / 2; ++col)
+                    {
+                        uvRef.Row<uint8_t>(row)[2 * col + 0] = uRef.Row<uint8_t>(row)[col];
+                        uvRef.Row<uint8_t>(row)[2 * col + 1] = vRef.Row<uint8_t>(row)[col];
+                    }
+                }
+
+                for (int order = SimdBgr; order <= SimdRgb; ++order)
+                {
+                    const View& src = order == SimdBgr ? bgr : rgb;
+                    for (size_t backend = 0; backend < sizeof(functions) / sizeof(functions[0]); ++backend)
+                    {
+                        const FuncNv12& convert = *functions[backend];
+                        if (!convert.func || (functions[backend] == &avx2 && width < avx2Block))
+                            continue;
+                        for (int row = 0; row < height; ++row)
+                            for (int col = 0; col < width; ++col)
+                                y.Row<uint8_t>(row)[col] = yRef.Row<uint8_t>(row)[col] ^ 0xFF;
+                        for (int row = 0; row < height / 2; ++row)
+                            for (int col = 0; col < width; ++col)
+                                uv.Row<uint8_t>(row)[col] = uvRef.Row<uint8_t>(row)[col] ^ 0xFF;
+                        if (narrow)
+                            convert.func(src.data, src.stride, width, height, y.data, y.stride, uv.data, uv.stride,
+                                (SimdRgbOrderType)order, yuvType);
+                        else
+                        {
+                            TEST_EXECUTE_AT_LEAST_MIN_TIME(convert.Call(src, y, uv, (SimdRgbOrderType)order, yuvType));
+                        }
+                        if (!Compare(yRef, y, 0, true, 64, 0, "NV12 Y") || !Compare(uvRef, uv, 0, true, 64, 0, "NV12 UV"))
+                        {
+                            TEST_LOG_SS(Error, convert.description << " mismatch: width " << width << ", YUV type " << type << ", channel order " << order);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    bool BgrToNv12AutoTest(const Options & options)
+    {
+        FuncNv12 avx2 = {};
+    #ifdef SIMD_AVX2_ENABLE
+        if (Simd::Avx2::Enable && TestAvx2(options))
+            avx2 = FUNC_NV12(Simd::Avx2::BgrToNv12);
+    #endif
+        return ColorToNv12AutoTest(View::Bgr24, Simd::Base::BgrToYuv420pV2, FUNC_NV12(SimdBgrToNv12),
+            TestBase(options) ? FUNC_NV12(Simd::Base::BgrToNv12) : FuncNv12{}, avx2);
+    }
+
+    bool BgraToNv12AutoTest(const Options & options)
+    {
+        FuncNv12 avx2 = {};
+    #ifdef SIMD_AVX2_ENABLE
+        if (Simd::Avx2::Enable && TestAvx2(options))
+            avx2 = FUNC_NV12(Simd::Avx2::BgraToNv12);
+    #endif
+        return ColorToNv12AutoTest(View::Bgra32, Simd::Base::BgraToYuv420pV2, FUNC_NV12(SimdBgraToNv12),
+            TestBase(options) ? FUNC_NV12(Simd::Base::BgraToNv12) : FuncNv12{}, avx2);
+    }
+
     bool BgrToYuv422PackedAutoTest(const Options & options)
     {
         bool result = true;

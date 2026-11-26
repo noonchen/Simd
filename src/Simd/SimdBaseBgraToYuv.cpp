@@ -111,19 +111,20 @@ namespace Simd
 
         //-------------------------------------------------------------------------------------------------
 
-        template <class YuvType> SIMD_INLINE void BgraToYuv420pV2(const uint8_t* bgra0, size_t bgraStride, uint8_t* y0, size_t yStride, uint8_t* u, uint8_t* v)
+        template <class YuvType, bool rgba = false> SIMD_INLINE void BgraToYuv420pV2(const uint8_t* bgra0, size_t bgraStride, uint8_t* y0, size_t yStride, uint8_t* u, uint8_t* v)
         {
             const uint8_t* bgra1 = bgra0 + bgraStride;
             uint8_t* y1 = y0 + yStride;
+            const size_t blueIndex = rgba ? 2 : 0, redIndex = rgba ? 0 : 2;
 
-            y0[0] = BgrToY<YuvType>(bgra0[0], bgra0[1], bgra0[2]);
-            y0[1] = BgrToY<YuvType>(bgra0[4], bgra0[5], bgra0[6]);
-            y1[0] = BgrToY<YuvType>(bgra1[0], bgra1[1], bgra1[2]);
-            y1[1] = BgrToY<YuvType>(bgra1[4], bgra1[5], bgra1[6]);
+            y0[0] = BgrToY<YuvType>(bgra0[blueIndex], bgra0[1], bgra0[redIndex]);
+            y0[1] = BgrToY<YuvType>(bgra0[4 + blueIndex], bgra0[5], bgra0[4 + redIndex]);
+            y1[0] = BgrToY<YuvType>(bgra1[blueIndex], bgra1[1], bgra1[redIndex]);
+            y1[1] = BgrToY<YuvType>(bgra1[4 + blueIndex], bgra1[5], bgra1[4 + redIndex]);
 
-            int blue = Average(bgra0[0], bgra0[4], bgra1[0], bgra1[4]);
+            int blue = Average(bgra0[blueIndex], bgra0[4 + blueIndex], bgra1[blueIndex], bgra1[4 + blueIndex]);
             int green = Average(bgra0[1], bgra0[5], bgra1[1], bgra1[5]);
-            int red = Average(bgra0[2], bgra0[6], bgra1[2], bgra1[6]);
+            int red = Average(bgra0[redIndex], bgra0[4 + redIndex], bgra1[redIndex], bgra1[4 + redIndex]);
 
             u[0] = BgrToU<YuvType>(blue, green, red);
             v[0] = BgrToV<YuvType>(blue, green, red);
@@ -157,6 +158,46 @@ namespace Simd
             default:
                 assert(0);
             }
+        }
+
+        //-------------------------------------------------------------------------------------------------
+
+        template <class YuvType, bool rgba> void BgraToNv12(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride)
+        {
+            assert((width % 2 == 0) && (height % 2 == 0) && (width >= 2) && (height >= 2));
+            for (size_t row = 0; row < height; row += 2)
+            {
+                for (size_t col = 0; col < width; col += 2)
+                    BgraToYuv420pV2<YuvType, rgba>(bgra + col * 4, bgraStride, y + col, yStride, uv + col, uv + col + 1);
+                bgra += 2 * bgraStride;
+                y += 2 * yStride;
+                uv += uvStride;
+            }
+        }
+
+        template <bool rgba> void BgraToNv12(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride, SimdYuvType yuvType)
+        {
+            switch (yuvType)
+            {
+            case SimdYuvBt601: BgraToNv12<Bt601, rgba>(bgra, bgraStride, width, height, y, yStride, uv, uvStride); break;
+            case SimdYuvBt709: BgraToNv12<Bt709, rgba>(bgra, bgraStride, width, height, y, yStride, uv, uvStride); break;
+            case SimdYuvBt2020: BgraToNv12<Bt2020, rgba>(bgra, bgraStride, width, height, y, yStride, uv, uvStride); break;
+            case SimdYuvTrect871: BgraToNv12<Trect871, rgba>(bgra, bgraStride, width, height, y, yStride, uv, uvStride); break;
+            default:
+                assert(0);
+            }
+        }
+
+        void BgraToNv12(const uint8_t* bgra, size_t bgraStride, size_t width, size_t height,
+            uint8_t* y, size_t yStride, uint8_t* uv, size_t uvStride, SimdRgbOrderType rgbOrder, SimdYuvType yuvType)
+        {
+            assert(rgbOrder == SimdBgr || rgbOrder == SimdRgb);
+            if (rgbOrder == SimdRgb)
+                BgraToNv12<true>(bgra, bgraStride, width, height, y, yStride, uv, uvStride, yuvType);
+            else
+                BgraToNv12<false>(bgra, bgraStride, width, height, y, yStride, uv, uvStride, yuvType);
         }
 
         //-------------------------------------------------------------------------------------------------
